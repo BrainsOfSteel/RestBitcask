@@ -4,6 +4,8 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.io.*;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.CRC32;
 
@@ -17,7 +19,51 @@ public class Index {
     @PostConstruct
     public void createIndexFromLogs(){
         //create Index from wal files assuming order by timestamp
+        File directoryPath = new File(walDirectory);
+        File[] fileList = directoryPath.listFiles();
+        if(fileList == null || fileList.length == 0){
+            return;
+        }
+        Arrays.sort(fileList, Comparator.comparing(File::getName));
+        for(int i =0; i< fileList.length;i++){
+            createIndex(fileList[i]);
+        }
+        System.out.println("Index");
     }
+
+    void createIndex(File file){
+        try(BufferedReader br = new BufferedReader(new FileReader(file))){
+            String line = null;
+            long startOffset=0;
+            while((line = br.readLine()) != null){
+                String[] content = line.split("\\|");
+                long crc = Long.parseLong(content[0]);
+                StringBuilder keySize = new StringBuilder();
+                int i =0;
+                while(i<6){
+                    keySize.append(content[1].charAt(i));
+                    i++;
+                }
+
+                StringBuilder key = new StringBuilder();
+                int j=i;
+                for(;i<j+Integer.parseInt(keySize.toString(), Character.MAX_RADIX);i++){
+                    key.append(content[1].charAt(i));
+                }
+                long actualCrc = getCrc(content[1]+"\n");
+                if(crc != actualCrc){
+                    throw new RuntimeException("crc mismatch");
+                }
+                indexData.put(key.toString(), new FileMetaData(walDirectory +"/"+ file.getName(), startOffset));
+                startOffset += line.length()+1;
+            }
+        } catch (Exception e){
+            e.printStackTrace();
+            System.out.println("catastrophic failure. Files corrupted");
+            System.exit(1);
+        }
+    }
+
     public void put(String key, String data) throws IOException {
         FileMetaData fileMetaData = null;
         String logLine = createLogLine(key, data);
